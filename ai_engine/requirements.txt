@@ -1,0 +1,9 @@
+PyPDF2
+docx2txt
+python-pptx
+faiss-cpu
+numpy
+google-generativeai
+wikipedia
+requests
+python-dotenv
