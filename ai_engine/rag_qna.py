@@ -2,20 +2,21 @@ import os
 import PyPDF2
 import docx2txt
 import numpy as np
-import faiss
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from groq import Groq
 from pptx import Presentation
-import google.generativeai as genai
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-# Configure Gemini
-api_key = os.getenv("GOOGLE_API_KEY")
+# Configure Groq
+api_key = os.getenv("GROQ_API_KEY")
 if not api_key:
-    print("Warning: GOOGLE_API_KEY not found. Please set it in .env")
-else:
-    genai.configure(api_key=api_key)
+    print("Warning: GROQ_API_KEY not found. Please set it in .env")
+
+client = Groq(api_key=api_key)
 
 def extract_text_from_pdf(file_path):
     text = ""
@@ -60,43 +61,38 @@ def extract_text(file_path):
     else:
         raise ValueError("Unsupported file type")
 
-def chunk_text(text, chunk_size=500):
+def chunk_text(text, chunk_size=300):
     words = text.split()
     chunks = []
-    for i in range(0, len(words), chunk_size):
+    # Overlapping chunks for better context in retrieval
+    step = int(chunk_size * 0.8) 
+    for i in range(0, len(words), step):
         chunks.append(" ".join(words[i:i+chunk_size]))
     return chunks
 
 def build_vector_store(chunks):
+    # Use TF-IDF for lightweight, dependency-free retrieval
     try:
-        # Use Gemini for embeddings
-        result = genai.embed_content(
-            model="models/text-embedding-004",
-            content=chunks,
-            task_type="retrieval_document",
-            title="Custom Document"
-        )
-        embeddings = np.array(result['embedding'])
-        
-        dimension = embeddings.shape[1]
-        index = faiss.IndexFlatL2(dimension)
-        index.add(embeddings)
-        return index, chunks
+        vectorizer = TfidfVectorizer(stop_words='english')
+        tfidf_matrix = vectorizer.fit_transform(chunks)
+        return {"vectorizer": vectorizer, "matrix": tfidf_matrix}, chunks
     except Exception as e:
-        raise RuntimeError(f"Failed to generate embeddings: {e}")
+        raise RuntimeError(f"Failed to build search index: {e}")
 
 def retrieve(query, index, chunks, top_k=3):
     try:
-        # Embed query
-        result = genai.embed_content(
-            model="models/text-embedding-004",
-            content=query,
-            task_type="retrieval_query"
-        )
-        query_vec = np.array([result['embedding']])
+        vectorizer = index["vectorizer"]
+        tfidf_matrix = index["matrix"]
         
-        distances, indices = index.search(query_vec, top_k)
-        return [chunks[i] for i in indices[0]]
+        query_vec = vectorizer.transform([query])
+        
+        # Calculate cosine similarity
+        similarities = cosine_similarity(query_vec, tfidf_matrix).flatten()
+        
+        # Get top k indices
+        top_indices = similarities.argsort()[-top_k:][::-1]
+        
+        return [chunks[i] for i in top_indices]
     except Exception as e:
         print(f"Retrieval failed: {e}")
         return []
@@ -106,7 +102,7 @@ def answer_question(query, index, chunks):
     if not retrieved_chunks:
         return "Could not retrieve context to answer the question."
         
-    context = " ".join(retrieved_chunks)
+    context = "\n---\n".join(retrieved_chunks)
     
     prompt = f"""
     Answer the question based only on the following content. Do not invent information. Be accurate and unbiased.
@@ -117,31 +113,32 @@ def answer_question(query, index, chunks):
     Question: {query}
     """
     
-    # Retry logic for generation
-    import time
     max_retries = 3
     base_delay = 2
-    
+    import time
+
     for attempt in range(max_retries):
         try:
-            model = genai.GenerativeModel('gemini-2.0-flash')
-            response = model.generate_content(prompt)
-            
-            # Check if value is returned
-            if not response.text:
-                return "Error: Empty response from AI."
-                
-            return response.text
-            
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    }
+                ],
+                model="llama3-70b-8192",
+                temperature=0.2,
+            )
+            return chat_completion.choices[0].message.content
         except Exception as e:
-            if "429" in str(e) or "quota" in str(e).lower() or "resource" in str(e).lower():
+            if "429" in str(e) or "quota" in str(e).lower():
                 if attempt < max_retries - 1:
                     wait_time = base_delay * (2 ** attempt)
-                    print(f"Rate limit hit. Retrying in {wait_time}s...")
+                    print(f"Rate limit hit. Retrying in {wait_time} s...")
                     time.sleep(wait_time)
                     continue
                 else:
-                    return f"Error: API error: 429 (Rate Limit Exceeded). Please try again later."
+                    return f"Error: API error: 429 (Rate Limit Exceeded)."
             return f"Error generating answer: {e}"
 
 def main():
@@ -159,11 +156,8 @@ def main():
 
     print("Chunking text...")
     chunks = chunk_text(text, chunk_size=300)
-    if not chunks:
-        print("No chunks created.")
-        return
 
-    print("Building vector store (using Gemini Embeddings)...")
+    print("Building search index (TF-IDF)...")
     try:
         index, chunks = build_vector_store(chunks)
     except Exception as e:

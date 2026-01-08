@@ -1,9 +1,10 @@
 PyPDF2
 docx2txt
 python-pptx
-faiss-cpu
 numpy
-google-generativeai
+scikit-learn
+groq
 wikipedia
 requests
 python-dotenv
+streamlit
