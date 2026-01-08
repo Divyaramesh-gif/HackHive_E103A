@@ -218,25 +218,35 @@ function App() {
 
       const ragData = await ragResponse.json();
 
-      // Step 2: Send to Gemini with RAG-enhanced prompt
-      const apiKey = import.meta.env.VITE_API_GENERATIVE_LANGUAGE_CLIENT;
+      // Step 2: Send to Groq with RAG-enhanced prompt
+      const apiKey = import.meta.env.VITE_GROQ_API_KEY;
       
-      if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY_HERE") {
-        throw new Error("API key not configured! Please add your Gemini API key to .env.local file.");
+      if (!apiKey) {
+        throw new Error("API key not configured! Please add VITE_GROQ_API_KEY to .env.local file.");
       }
       
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+        "https://api.groq.com/openai/v1/chat/completions",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { 
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+          },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: ragData.prompt }] }],
-            generationConfig: {
-              temperature: 0.3, // Lower temperature for more factual responses
-              topP: 0.8,
-              topK: 40,
-            },
+            model: "llama-3.3-70b-versatile",
+            messages: [
+              {
+                role: "system",
+                content: "You are an educational AI assistant. Provide clear, accurate, and level-appropriate explanations based on the curriculum materials provided."
+              },
+              {
+                role: "user",
+                content: ragData.prompt
+              }
+            ],
+            temperature: 0.3,
+            max_tokens: 2048,
           }),
         }
       );
@@ -244,11 +254,11 @@ function App() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+        throw new Error(`API error: ${response.status} - ${data.error?.message || 'Unknown error'}`);
       }
 
-      if (data?.candidates?.length > 0) {
-        const fullAnswer = data.candidates[0].content.parts[0].text;
+      if (data?.choices?.length > 0) {
+        const fullAnswer = data.choices[0].message.content;
         setChatHistory((prev) => [
           ...prev,
           { 

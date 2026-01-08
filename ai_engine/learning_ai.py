@@ -60,7 +60,7 @@ Give:
                         "content": prompt,
                     }
                 ],
-                model="llama3-70b-8192", # Using robust Llama 3 model
+                model="llama-3.3-70b-versatile", # Using robust Llama 3.3 model
                 temperature=0.2,
             )
             return chat_completion.choices[0].message.content
